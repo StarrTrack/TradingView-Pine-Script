@@ -1,0 +1,157 @@
+//@version=6
+indicator("StarrCo - Enhanced RSI Strategy (Fixed)", overlay=true)
+
+// === ОСНОВНЫЕ НАСТРОЙКИ ===
+var g1 = "RSI Settings"
+rsiLength = input.int(14, "RSI Length", minval=2, maxval=50, group=g1)
+rsiOverbought = input.int(70, "RSI Overbought Level", minval=50, maxval=90, group=g1)
+rsiOversold = input.int(25, "RSI Oversold Level", minval=10, maxval=50, group=g1)
+
+var g2 = "Trend Filter"
+emaFast = input.int(21, "Fast EMA", minval=5, maxval=100, group=g2)
+emaSlow = input.int(50, "Slow EMA", minval=20, maxval=200, group=g2)
+emaLong = input.int(200, "Long EMA", minval=100, maxval=500, group=g2)
+useTrendFilter = input.bool(false, "Use Trend Filter", group=g2) // Отключаем по умолчанию
+
+var g3 = "Advanced Settings"
+volumeConfirmation = input.bool(false, "Volume Confirmation", group=g3) // Отключаем по умолчанию
+divergenceDetection = input.bool(false, "Divergence Detection", group=g3) // Отключаем по умолчанию
+candlePatterns = input.bool(false, "Candle Pattern Analysis", group=g3) // Отключаем по умолчанию
+dynamicLevels = input.bool(false, "Dynamic RSI Levels", group=g3) // Отключаем по умолчанию
+
+var g4 = "Risk Management"
+stopLossPercent = input.float(2.0, "Stop Loss %", minval=0.5, maxval=10.0, step=0.1, group=g4)
+takeProfitPercent = input.float(4.0, "Take Profit %", minval=1.0, maxval=20.0, step=0.1, group=g4)
+maxPositions = input.int(3, "Max Concurrent Positions", minval=1, maxval=10, group=g4)
+
+var g5 = "Debug"
+showDebugInfo = input.bool(true, "Show Debug Info", group=g5)
+
+// === ВЫЧИСЛЕНИЯ ===
+rsi = ta.rsi(close, rsiLength)
+
+// Динамические уровни RSI на основе волатильности
+atr = ta.atr(14)
+volatilityMultiplier = atr / ta.sma(atr, 50)
+dynamicOverbought = dynamicLevels ? math.min(90, rsiOverbought + (volatilityMultiplier - 1) * 10) : rsiOverbought
+dynamicOversold = dynamicLevels ? math.max(10, rsiOversold - (volatilityMultiplier - 1) * 10) : rsiOversold
+
+// Скользящие средние
+ema21 = ta.ema(close, emaFast)
+ema50 = ta.ema(close, emaSlow)
+ema200 = ta.ema(close, emaLong)
+
+// Упрощенный тренд-фильтр
+bullTrend = ema21 > ema50 and ema50 > ema200
+bearTrend = ema21 < ema50 and ema50 < ema200
+sidewaysTrend = not bullTrend and not bearTrend
+
+// Объем
+avgVolume = ta.sma(volume, 20)
+volumeSpike = volume > avgVolume * 1.5
+volumeConfirmed = not volumeConfirmation or volumeSpike
+
+// Поддержка и сопротивление (упрощенная версия)
+leftBars = 10
+rightBars = 5
+pivotHigh = ta.pivothigh(high, leftBars, rightBars)
+pivotLow = ta.pivotlow(low, leftBars, rightBars)
+
+resistance = fixnan(pivotHigh)
+support = fixnan(pivotLow)
+
+// === УПРОЩЕННЫЕ УСЛОВИЯ ВХОДА ===
+// Базовые условия RSI без дополнительных фильтров
+basicLongCondition = rsi < dynamicOversold
+basicShortCondition = rsi > dynamicOverbought
+
+// Условия с трендовым фильтром (если включен)
+trendLongCondition = not useTrendFilter or bullTrend or sidewaysTrend
+trendShortCondition = not useTrendFilter or bearTrend or sidewaysTrend
+
+// Условия с объемом (если включен)
+volumeLongCondition = volumeConfirmed
+volumeShortCondition = volumeConfirmed
+
+// Финальные условия (упрощенные)
+longCondition = basicLongCondition and trendLongCondition and volumeLongCondition
+shortCondition = basicShortCondition and trendShortCondition and volumeShortCondition
+
+// Простая система предотвращения повторных сигналов
+longSignal = longCondition and not longCondition[1]
+shortSignal = shortCondition and not shortCondition[1]
+
+// === ВИЗУАЛИЗАЦИЯ ===
+// Скользящие средние
+plot(ema21, "EMA 21", color=color.blue, linewidth=1)
+plot(ema50, "EMA 50", color=color.orange, linewidth=1)
+plot(ema200, "EMA 200", color=color.purple, linewidth=2)
+
+// RSI уровни
+hline(rsiOverbought, "Overbought", color=color.red, linestyle=hline.style_dashed)
+hline(rsiOversold, "Oversold", color=color.green, linestyle=hline.style_dashed)
+
+// === СИГНАЛЫ И МЕТКИ ===
+if longSignal
+    stopLoss = close * (1 - stopLossPercent / 100)
+    takeProfit = close * (1 + takeProfitPercent / 100)
+    label.new(bar_index, low - atr, text="LONG\nSL: " + str.tostring(stopLoss, "#.##") + "\nTP: " + str.tostring(takeProfit, "#.##"), 
+              style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.normal)
+
+if shortSignal
+    stopLoss = close * (1 + stopLossPercent / 100)
+    takeProfit = close * (1 - takeProfitPercent / 100)
+    label.new(bar_index, high + atr, text="SHORT\nSL: " + str.tostring(stopLoss, "#.##") + "\nTP: " + str.tostring(takeProfit, "#.##"), 
+              style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
+
+// Стрелки сигналов
+plotshape(longSignal, title="Long Entry", location=location.belowbar, 
+          color=color.green, style=shape.triangleup, size=size.normal)
+plotshape(shortSignal, title="Short Entry", location=location.abovebar, 
+          color=color.red, style=shape.triangledown, size=size.normal)
+
+// Цветовая подсветка фона
+trendColor = bullTrend ? color.new(color.green, 95) : 
+             bearTrend ? color.new(color.red, 95) : 
+             color.new(color.gray, 97)
+bgcolor(useTrendFilter ? trendColor : na, title="Trend Background")
+
+// === ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ===
+if showDebugInfo and barstate.islast
+    var table debugTable = table.new(position.bottom_right, 2, 10, bgcolor=color.white, border_width=1)
+    
+    table.cell(debugTable, 0, 0, "Debug Info", text_color=color.white, bgcolor=color.black)
+    table.cell(debugTable, 1, 0, "Values", text_color=color.white, bgcolor=color.black)
+    
+    table.cell(debugTable, 0, 1, "RSI", text_color=color.black)
+    table.cell(debugTable, 1, 1, str.tostring(rsi, "#.##"), text_color=color.black)
+    
+    table.cell(debugTable, 0, 2, "RSI < " + str.tostring(dynamicOversold), text_color=color.black)
+    table.cell(debugTable, 1, 2, basicLongCondition ? "TRUE" : "FALSE", text_color=basicLongCondition ? color.green : color.red)
+    
+    table.cell(debugTable, 0, 3, "RSI > " + str.tostring(dynamicOverbought), text_color=color.black)
+    table.cell(debugTable, 1, 3, basicShortCondition ? "TRUE" : "FALSE", text_color=basicShortCondition ? color.green : color.red)
+    
+    table.cell(debugTable, 0, 4, "Trend Filter", text_color=color.black)
+    trendText = useTrendFilter ? (bullTrend ? "Bull" : bearTrend ? "Bear" : "Side") : "OFF"
+    table.cell(debugTable, 1, 4, trendText, text_color=color.black)
+    
+    table.cell(debugTable, 0, 5, "Volume Filter", text_color=color.black)
+    volumeText = volumeConfirmation ? (volumeSpike ? "HIGH" : "LOW") : "OFF"
+    table.cell(debugTable, 1, 5, volumeText, text_color=color.black)
+    
+    table.cell(debugTable, 0, 6, "Long Condition", text_color=color.black)
+    table.cell(debugTable, 1, 6, longCondition ? "TRUE" : "FALSE", text_color=longCondition ? color.green : color.red)
+    
+    table.cell(debugTable, 0, 7, "Short Condition", text_color=color.black)
+    table.cell(debugTable, 1, 7, shortCondition ? "TRUE" : "FALSE", text_color=shortCondition ? color.green : color.red)
+    
+    table.cell(debugTable, 0, 8, "Long Signal", text_color=color.black)
+    table.cell(debugTable, 1, 8, longSignal ? "FIRE!" : "NO", text_color=longSignal ? color.lime : color.gray)
+    
+    table.cell(debugTable, 0, 9, "Short Signal", text_color=color.black)
+    table.cell(debugTable, 1, 9, shortSignal ? "FIRE!" : "NO", text_color=shortSignal ? color.lime : color.gray)
+
+// === АЛЕРТЫ ===
+alertcondition(longSignal, title="Long Signal", message="RSI Long Entry Signal - {{ticker}} at {{close}}")
+alertcondition(shortSignal, title="Short Signal", message="RSI Short Entry Signal - {{ticker}} at {{close}}")
